@@ -35,9 +35,9 @@ func (s *Service) Register(username, password string) error {
 	if err != nil {
 		return err
 	}
-	// Query to insert a new user
-	query := "INSERT INTO users (username, password) VALUES (?, ?)"
-	// Insert the new user into the database
+	// Correct query with $1 and $2
+	query := "INSERT INTO users (username, password) VALUES ($1, $2)"
+	// Insert into database
 	_, err = s.db.Exec(query, username, string(hashedPassword))
 	if err != nil {
 		// Check for unique constraint violation
@@ -54,7 +54,7 @@ func (s *Service) Register(username, password string) error {
 
 func (s *Service) Login(username, password string) (string, error) {
 	var user db.User
-	err := s.db.QueryRow("SELECT id, username, password FROM users WHERE username = ?", username).Scan(&user.ID, &user.Username, &user.Password)
+	err := s.db.QueryRow("SELECT id, username, password FROM users WHERE username = $1", username).Scan(&user.ID, &user.Username, &user.Password)
 
 	if err != nil {
 		return "", errors.New("invalid credentials")
