@@ -1,0 +1,46 @@
+version: '3.8'
+
+services:
+  postgres:
+    image: postgres:14
+    restart: always
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: Krishanu1137
+      POSTGRES_DB: battleship
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    networks:
+      - backend
+
+  redis:
+    image: redis:7
+    restart: always
+    ports:
+      - "6379:6379"
+    networks:
+      - backend
+
+  battleship-backend:
+    build: .
+    depends_on:
+      - postgres
+      - redis
+    ports:
+      - "8080:8080"
+    environment:
+      - DB_URL=postgresql://postgres:Krishanu1137@postgres:5432/battleship?sslmode=disable
+      - REDIS_ADDR=redis:6379
+      - REDIS_PASSWORD=
+      - JWT_SECRET=05ede2e4c781baea60fa9d8b06968b57b67c06ae426096c2186a01f1b04a3072
+    networks:
+      - backend
+
+volumes:
+  postgres_data:
+
+networks:
+  backend:
+    driver: bridge
