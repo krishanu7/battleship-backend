@@ -11,7 +11,10 @@ import (
 var ctx = context.Background()
 
 func NewRedisClient() *redis.Client {
-	addr := os.Getenv("REDIS_HOST")
+	addr := os.Getenv("REDIS_ADDR")
+	if addr == "" {
+		addr = "localhost:6379" // fallback for local dev
+	}
 	password := os.Getenv("REDIS_PASSWORD")
 	db := 0
 

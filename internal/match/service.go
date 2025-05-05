@@ -11,6 +11,7 @@ type Service struct {
 	redisClient *redis.Client
 	ctx         context.Context
 	queueName   string
+	setName     string
 }
 
 func NewService(rdb *redis.Client) *Service {
@@ -18,37 +19,57 @@ func NewService(rdb *redis.Client) *Service {
 		redisClient: rdb,
 		ctx:         context.Background(),
 		queueName:   "matchmaking_queue",
+		setName:     "queued_players",
 	}
 }
 
 func (s *Service) AddToQueue(playerID string) error {
-	err := s.redisClient.LPush(s.ctx, s.queueName, playerID).Err()
+	// Check if player is already in the set
+	exists, err := s.redisClient.SIsMember(s.ctx, s.setName, playerID).Result()
 	if err != nil {
-		return fmt.Errorf("failed to add player to queue: %w", err)
+		return fmt.Errorf("failed to check queue set: %w", err)
+	}
+	if exists {
+		return fmt.Errorf("player already in queue")
+	}
+
+	// Add to list and set
+	if err := s.redisClient.LPush(s.ctx, s.queueName, playerID).Err(); err != nil {
+		return fmt.Errorf("failed to add to queue: %w", err)
+	}
+	if err := s.redisClient.SAdd(s.ctx, s.setName, playerID).Err(); err != nil {
+		// Rollback list addition on set failure
+		s.redisClient.LRem(s.ctx, s.queueName, 0, playerID)
+		return fmt.Errorf("failed to add to queue set: %w", err)
+	}
+	return nil
+}
+
+func (s *Service) RemoveFromQueue(playerID string) error {
+	// Remove from list (first occurrence) and from set
+	if err := s.redisClient.LRem(s.ctx, s.queueName, 0, playerID).Err(); err != nil {
+		return fmt.Errorf("failed to remove from queue: %w", err)
+	}
+	if err := s.redisClient.SRem(s.ctx, s.setName, playerID).Err(); err != nil {
+		return fmt.Errorf("failed to remove from set: %w", err)
 	}
 	return nil
 }
 
 func (s *Service) MatchPlayers() (string, string, error) {
-	player1, err := s.redisClient.RPop(s.ctx, s.queueName).Result()
-
+	p1, err := s.redisClient.RPop(s.ctx, s.queueName).Result()
 	if err != nil {
-		return "", "", fmt.Errorf("failed to pop player from queue: %w", err)
+		return "", "", fmt.Errorf("not enough players")
 	}
-	player2, err := s.redisClient.RPop(s.ctx, s.queueName).Result()
-
+	p2, err := s.redisClient.RPop(s.ctx, s.queueName).Result()
 	if err != nil {
-		// Put player1 back to the queue
-		s.redisClient.LPush(s.ctx, s.queueName, player1)
-		return "", "", fmt.Errorf("not enough players to match")
+		s.redisClient.LPush(s.ctx, s.queueName, p1)
+		return "", "", fmt.Errorf("not enough players")
 	}
-	return player1, player2, nil
+	s.redisClient.SRem(s.ctx, s.setName, p1, p2)
+	return p1, p2, nil
 }
 
 func (s *Service) QueueLength() (int64, error) {
-	length, err := s.redisClient.LLen(s.ctx, s.queueName).Result()
-	if err != nil {
-		return 0, err
-	}
-	return length, nil
+	return s.redisClient.LLen(s.ctx, s.queueName).Result()
 }

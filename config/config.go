@@ -10,6 +10,8 @@ import (
 type Config struct {
 	DBUrl     string
 	JWTSecret string
+	RedisAddr     string
+	RedisPassword string
 }
 
 func LoadConfig() Config {
@@ -22,5 +24,7 @@ func LoadConfig() Config {
 	return Config{
 		DBUrl:     os.Getenv("DB_URL"),
 		JWTSecret: os.Getenv("JWT_SECRET"),
+		RedisAddr: os.Getenv("REDIS_ADDR"),
+		RedisPassword: os.Getenv("REDIS_PASSWORD"),
 	}
 }
