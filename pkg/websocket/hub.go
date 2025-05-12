@@ -1,43 +1,33 @@
 package websocket
 
 import (
-	"log"
+	"sync"
 )
 
 type Hub struct {
-	Clients    map[string]*Client
-	Register   chan *Client
-	Unregister chan *Client
-	Broadcast  chan []byte
+	Rooms map[string]*Room
+	mu    sync.Mutex
 }
 
 func NewHub() *Hub {
 	return &Hub{
-		Clients:    make(map[string]*Client),
-		Register:   make(chan *Client),
-		Unregister: make(chan *Client),
-		Broadcast:  make(chan []byte),
+		Rooms: make(map[string]*Room),
 	}
 }
 
-func (h *Hub) Run() {
-	for {
-		select {
-		case client := <-h.Register:
-			h.Clients[client.ID] = client
-			log.Printf("Client connected: %s", client.ID)
+func (h *Hub) CreateRoom(id string) *Room {
+	h.mu.Lock()
+	defer h.mu.Unlock()
 
-		case client := <-h.Unregister:
-			if _, ok := h.Clients[client.ID]; ok {
-				delete(h.Clients, client.ID)
-				close(client.Send)
-				log.Printf("Client disconnected: %s", client.ID)
-			}
+	room := NewRoom(id)
+	h.Rooms[id] = room
+	return room
+}
 
-		case message := <-h.Broadcast:
-			for _, client := range h.Clients {
-				client.Send <- message
-			}
-		}
-	}
+func (h *Hub) GetRoom(id string) (*Room, bool ){
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	
+	room, exists := h.Rooms[id]
+	return room, exists
 }
