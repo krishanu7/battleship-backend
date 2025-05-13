@@ -24,7 +24,10 @@ services:
       - backend
 
   battleship-backend:
-    build: .
+    build:
+      context: .
+      dockerfile: Dockerfile
+      target: backend
     depends_on:
       - postgres
       - redis
@@ -37,9 +40,23 @@ services:
       - JWT_SECRET=05ede2e4c781baea60fa9d8b06968b57b67c06ae426096c2186a01f1b04a3072
     networks:
       - backend
-
+  matchmaker:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      target: matchmaker
+    depends_on:
+      - redis
+    ports:
+      - "8081:8081"
+    environment:
+      - REDIS_ADDR=redis:6379
+      - REDIS_PASSWORD=
+    networks:
+      - backend
 volumes:
   postgres_data:
+
 
 networks:
   backend:

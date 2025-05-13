@@ -1,4 +1,5 @@
-FROM golang:1.24
+# Build Stage
+FROM golang:1.24 AS builder
 
 WORKDIR /app
 
@@ -9,11 +10,22 @@ RUN go mod download
 # Copy rest of the source code
 COPY . .
 
-# Build the Go app
-RUN go build -o battleship-backend .
+# Build the main backend binary
+RUN CGO_ENABLED=0 GOOS=linux go build -o battleship-backend .
 
-# Expose the app port
+# Build the matchmaker binary
+RUN CGO_ENABLED=0 GOOS=linux go build -o matchmaker ./cmd/matchmaker
+
+# Backend runtime stage
+FROM alpine:latest AS backend
+WORKDIR /app
+COPY --from=builder /app/battleship-backend .
 EXPOSE 8080
-
-# Run the binary
 CMD ["./battleship-backend"]
+
+# Matchmaker runtime stage
+FROM alpine:latest AS matchmaker
+WORKDIR /app
+COPY --from=builder /app/matchmaker .
+CMD ["./matchmaker"]
+
