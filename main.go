@@ -39,6 +39,9 @@ func main() {
 	hub := wsPkg.NewHub()
 	wsHandler := ws.NewHandler(hub)
 
+	generalHub := wsPkg.NewGeneralHub()
+	generalWsHandler := ws.NewGeneralHandler(generalHub)
+
 	// 4. Route Handlers
 	r := mux.NewRouter()
 	r.HandleFunc("/api/v1/auth/register", authHandler.Register).Methods("POST")
@@ -49,7 +52,9 @@ func main() {
 	r.HandleFunc("/api/v1/match/start", matchHandler.StartMatch).Methods("POST")
 	r.HandleFunc("/api/v1/match/cancel", matchHandler.CancelMatch).Methods("POST")
 	r.HandleFunc("/api/v1/match/status", matchHandler.GetMatchStatus).Methods("GET")
+
 	r.HandleFunc("/ws", wsHandler.ServeWS).Methods("GET")
+	r.HandleFunc("/ws/general", generalWsHandler.ServeGeneralWS).Methods("GET")
 
 	// 5. Start Server
 	log.Println("Server starting on :8080")
