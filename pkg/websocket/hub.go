@@ -31,3 +31,9 @@ func (h *Hub) GetRoom(id string) (*Room, bool ){
 	room, exists := h.Rooms[id]
 	return room, exists
 }
+func (h *Hub) RemoveRoom(id string) {
+	h.mu.Lock()
+
+	defer h.mu.Unlock()
+	delete(h.Rooms,id)
+}

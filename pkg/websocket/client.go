@@ -10,4 +10,3 @@ type Client struct {
 	Send chan []byte
 	Room *Room
 }
-

@@ -5,13 +5,13 @@ import (
 )
 
 type Room struct {
-	ID string
+	ID      string
 	Clients map[string]*Client
 }
 
 func NewRoom(id string) *Room {
-	return &Room {
-		ID: id,
+	return &Room{
+		ID:      id,
 		Clients: make(map[string]*Client),
 	}
 }
