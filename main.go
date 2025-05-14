@@ -9,9 +9,9 @@ import (
 	"github.com/krishanu7/battleship-backend/config"
 	"github.com/krishanu7/battleship-backend/internal/auth"
 	"github.com/krishanu7/battleship-backend/internal/match"
-	"github.com/krishanu7/battleship-backend/internal/ws"
 	"github.com/krishanu7/battleship-backend/pkg/redis"
 	wsPkg "github.com/krishanu7/battleship-backend/pkg/websocket"
+	"github.com/krishanu7/battleship-backend/internal/ws"
 )
 
 func main() {
@@ -41,7 +41,11 @@ func main() {
 
 	generalHub := wsPkg.NewGeneralHub()
 	generalWsHandler := ws.NewGeneralHandler(generalHub)
-
+	
+	//Start notification worker
+	notificationWorker := ws.NewNotificationWorker(rdb, generalHub)
+	go notificationWorker.Run()
+	
 	// 4. Route Handlers
 	r := mux.NewRouter()
 	r.HandleFunc("/api/v1/auth/register", authHandler.Register).Methods("POST")
