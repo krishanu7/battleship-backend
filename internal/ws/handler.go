@@ -16,9 +16,8 @@ func NewHandler(hub *wsPkg.Hub) *Handler {
 	return &Handler{Hub: hub}
 }
 
-func (h* Handler) ServeWS(w http.ResponseWriter, r *http.Request) {
-	conn, err := wsPkg.Upgrader.Upgrade(w,r,nil)
-
+func (h *Handler) ServeWS(w http.ResponseWriter, r *http.Request) {
+	conn, err := wsPkg.Upgrader.Upgrade(w, r, nil)
 	if err != nil {
 		log.Printf("Upgrade failed: %v", err)
 		return
@@ -35,25 +34,26 @@ func (h* Handler) ServeWS(w http.ResponseWriter, r *http.Request) {
 
 	room, exists := h.Hub.GetRoom(roomID)
 	if !exists {
-		log.Printf("Room %s does not exist", roomID)
+		log.Printf("Room %s does not exist for player %s", roomID, playerID)
 		conn.Close()
 		return
 	}
 
 	client := &wsPkg.Client{
-		ID:  playerID,
+		ID:   playerID,
 		Conn: conn,
-		Send: make(chan []byte),
+		Send: make(chan []byte, 10), // Add buffer
 	}
 
 	room.AddClient(client)
 
+	log.Printf("Player %s connected to room %s", playerID, roomID)
 	go h.read(client)
 	go h.write(client)
 }
 
 func (h *Handler) read(c *wsPkg.Client) {
-	defer func(){
+	defer func() {
 		if c.Room != nil {
 			delete(c.Room.Clients, c.ID)
 			log.Printf("Client %s left room %s", c.ID, c.Room.ID)
@@ -63,10 +63,12 @@ func (h *Handler) read(c *wsPkg.Client) {
 	for {
 		_, msg, err := c.Conn.ReadMessage()
 		if err != nil {
-			log.Printf("Read error: %v", err)
+			log.Printf("Read error for client %s: %v", c.ID, err)
 			break
 		}
-		c.Room.Broadcast(c.ID, msg)
+		if c.Room != nil {
+			c.Room.Broadcast(c.ID, msg)
+		}
 	}
 }
 
@@ -76,8 +78,9 @@ func (h *Handler) write(c *wsPkg.Client) {
 	for msg := range c.Send {
 		err := c.Conn.WriteMessage(websocket.TextMessage, msg)
 		if err != nil {
-			log.Printf("Write error: %v", err)
+			log.Printf("Write error for client %s: %v", c.ID, err)
 			break
 		}
+		log.Printf("Sent message to client %s: %s", c.ID, string(msg))
 	}
 }
