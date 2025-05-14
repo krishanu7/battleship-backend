@@ -21,7 +21,7 @@ func (h *GeneralHub) AddClient(c *GeneralClient) {
 	defer h.mu.Unlock()
 
 	h.Clients[c.ID] = c
-	log.Printf("General client %s connected", c.ID)
+	log.Printf("General client %s connected, total clients: %d", c.ID, len(h.Clients))
 }
 
 func (h *GeneralHub) RemoveClient(c *GeneralClient) {
@@ -29,7 +29,7 @@ func (h *GeneralHub) RemoveClient(c *GeneralClient) {
 	defer h.mu.Unlock()
 
 	delete(h.Clients, c.ID)
-	log.Printf("General client %s disconnected", c.ID)
+	log.Printf("General client %s disconnected, total clients: %d", c.ID, len(h.Clients))
 }
 
 func (h *GeneralHub) SendToClient(playerID string, message []byte) bool {
@@ -37,15 +37,18 @@ func (h *GeneralHub) SendToClient(playerID string, message []byte) bool {
 	defer h.mu.Unlock()
 
 	client, exists := h.Clients[playerID]
-
 	if !exists {
+		log.Printf("Client %s not found in GeneralHub", playerID)
 		return false
 	}
 
+	log.Printf("Sending message to client %s: %s", playerID, string(message))
 	select {
 	case client.Send <- message:
+		log.Printf("Message sent to client %s", playerID)
 		return true
 	default:
+		log.Printf("Failed to send message to client %s: channel blocked", playerID)
 		return false
 	}
 }
