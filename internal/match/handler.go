@@ -19,7 +19,7 @@ func NewHandler(service *Service, matchChan chan MatchResult) *Handler {
 
 func (h *Handler) JoinQueue(w http.ResponseWriter, r *http.Request) {
 	var req struct {
-		PlayerID string `json:"player_id"`
+		PlayerID string `json:"playerId"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		http.Error(w, "invalid request payload", http.StatusBadRequest)
@@ -36,7 +36,7 @@ func (h *Handler) JoinQueue(w http.ResponseWriter, r *http.Request) {
 
 func (h *Handler) LeaveQueue(w http.ResponseWriter, r *http.Request) {
 	var req struct {
-		PlayerID string `json:"player_id"`
+		PlayerID string `json:"playerId"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil || req.PlayerID == "" {
 		http.Error(w, "invalid request", http.StatusBadRequest)
@@ -52,7 +52,7 @@ func (h *Handler) LeaveQueue(w http.ResponseWriter, r *http.Request) {
 
 func (h *Handler) StartMatch(w http.ResponseWriter, r *http.Request) {
 	var req struct {
-		PlayerID string `json:"player_id"`
+		PlayerID string `json:"playerId"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil || req.PlayerID == "" {
 		http.Error(w, "invalid request", http.StatusBadRequest)
@@ -70,7 +70,7 @@ func (h *Handler) StartMatch(w http.ResponseWriter, r *http.Request) {
 
 func (h *Handler) CancelMatch(w http.ResponseWriter, r *http.Request) {
 	var req struct {
-		PlayerID string `json:"player_id"`
+		PlayerID string `json:"playerId"`
 	}	
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil || req.PlayerID == "" {
 		http.Error(w, "invalid request", http.StatusBadRequest)
