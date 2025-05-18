@@ -45,11 +45,53 @@ func (w *NotificationWorker) Run() {
 			continue
 		}
 		// log.Printf("Parsed notification for player %s: type=%s, roomId=%s", notification.Player, notification.Type, notification.RoomID)
-
+		// Forward to the specific player via GeneralHub
 		if !w.GeneralHub.SendToClient(notification.Player, []byte(msg.Payload)) {
 			log.Printf("Failed to send notification to player %s", notification.Player)
 		} else {
 			log.Printf("Successfully sent notification to player %s", notification.Player)
+		}
+		// Check if both players placed ships
+		if notification.Type == "ships_placed" {
+			players, err := w.RedisClient.SMembers(rdbPkg.Ctx, "room:"+notification.RoomID).Result()
+
+			if err != nil {
+				log.Printf("Failed to get room members: %v", err)
+				continue
+			}
+			bothReady := true
+			for _, player := range players {
+				key := "room:" + notification.RoomID + ":board:" + player
+
+				exists, err := w.RedisClient.Exists(rdbPkg.Ctx, key).Result()
+
+				if err != nil || exists == 0 {
+					bothReady = false
+					break
+				}
+			}
+			if bothReady {
+				// Notify both players that the game can start
+				gameStartMsg := struct {
+					Type   string `json:"type"`
+					RoomID string `json:"roomId"`
+				}{
+					Type:   "game_start",
+					RoomID: notification.RoomID,
+				}
+				msgBytes, err := json.Marshal(gameStartMsg)
+				if err != nil {
+					log.Printf("Failed to marshal game_start notification: %v", err)
+					continue
+				}
+				for _, player := range players {
+					if !w.GeneralHub.SendToClient(player, msgBytes) {
+						log.Printf("Failed to send game_start to player %s", player)
+					} else {
+						log.Printf("Sent game_start to player %s", player)
+					}
+				}
+			}
 		}
 	}
 }

@@ -5,8 +5,7 @@ import (
 	"fmt"
 	"log"
 	"time"
-
-	redisPkg "github.com/krishanu7/battleship-backend/pkg/redis"
+	rdbPkg "github.com/krishanu7/battleship-backend/pkg/redis"
 	"github.com/redis/go-redis/v9"
 )
 
@@ -20,19 +19,19 @@ func NewService(rdb *redis.Client) *Service {
 	}
 }
 
-func (s *Service) PlaceShips(roomID, playerID string, ships []Ship) (*Board, error){
-	isMember, err := s.rdb.SIsMember(redisPkg.Ctx, "room:"+roomID, playerID).Result()
-	
+// PlaceShips validates and stores a player's ship placements.
+func (s *Service) PlaceShips(roomID, playerID string, ships []Ship) (*Board, error) {
+	// Verify player is in room
+	isMember, err := s.rdb.SIsMember(rdbPkg.Ctx, "room:"+roomID, playerID).Result()
 	if err != nil || !isMember {
-		return nil, fmt.Errorf("Player %s not in room %s", playerID, roomID)
+		return nil, fmt.Errorf("player %s not in room %s", playerID, roomID)
 	}
 
+	// Validate ship count and types
 	if len(ships) != len(ShipConfig) {
-		return nil, fmt.Errorf("Expected %d ships, got %d", len(ShipConfig), len(ships)) 
+		return nil, fmt.Errorf("expected %d ships, got %d", len(ShipConfig), len(ships))
 	}
-
 	shipCounts := make(map[ShipType]int)
-
 	for _, ship := range ships {
 		expectedSize, exists := ShipConfig[ship.Type]
 		if !exists {
@@ -49,16 +48,15 @@ func (s *Service) PlaceShips(roomID, playerID string, ships []Ship) (*Board, err
 		}
 	}
 
+	// Validate and compute ship cells
 	board := &Board{
 		PlayerID: playerID,
-		RoomID: roomID,
-		Ships: ships,
-		Grid: make(map[string]string),
+		RoomID:   roomID,
+		Ships:    ships,
+		Grid:     make(map[string]string),
 	}
-
 	for i, ship := range ships {
 		row, col, err := ParseCoordinate(ship.Start)
-
 		if err != nil {
 			return nil, fmt.Errorf("invalid start for %s: %v", ship.Type, err)
 		}
@@ -81,6 +79,7 @@ func (s *Service) PlaceShips(roomID, playerID string, ships []Ship) (*Board, err
 			return nil, fmt.Errorf("invalid orientation for %s: %s", ship.Type, ship.Orientation)
 		}
 
+		// Check for overlaps
 		for _, cell := range cells {
 			if _, exists := board.Grid[cell]; exists {
 				return nil, fmt.Errorf("overlap at %s for %s", cell, ship.Type)
@@ -89,23 +88,42 @@ func (s *Service) PlaceShips(roomID, playerID string, ships []Ship) (*Board, err
 		}
 		ships[i].Cells = cells
 	}
-	// Store board in Redis
-	boardJSON, err :=  json.Marshal(board)
 
+	boardJSON, err := json.Marshal(board)
 	if err != nil {
 		return nil, fmt.Errorf("failed to marshal board: %v", err)
 	}
-	key := fmt.Sprintf("room:%s:board:%s",roomID,playerID)
-	if err := s.rdb.Set(redisPkg.Ctx, key, boardJSON, 24*time.Hour).Err(); err != nil {
+	key := fmt.Sprintf("room:%s:board:%s", roomID, playerID)
+	if err := s.rdb.Set(rdbPkg.Ctx, key, boardJSON, 24*time.Hour).Err(); err != nil {
 		return nil, fmt.Errorf("failed to store board: %v", err)
 	}
 	log.Printf("Stored board for player %s in room %s", playerID, roomID)
+
+	// Publish ships_placed notification
+	notification := struct {
+		Type   string `json:"type"`
+		RoomID string `json:"roomId"`
+		Player string `json:"player"`
+	}{
+		Type:   "ships_placed",
+		RoomID: roomID,
+		Player: playerID,
+	}
+	notificationBytes, err := json.Marshal(notification)
+	if err != nil {
+		log.Printf("Failed to marshal ships_placed notification for %s: %v", playerID, err)
+	} else {
+		if err := s.rdb.Publish(rdbPkg.Ctx, "notifications", notificationBytes).Err(); err != nil {
+			log.Printf("Failed to publish ships_placed notification for %s: %v", playerID, err)
+		} else {
+			log.Printf("Published ships_placed notification for player %s in room %s", playerID, roomID)
+		}
+	}
 	// Check if opponent has placed ships
-	players, err := s.rdb.SMembers(redisPkg.Ctx, "room:"+roomID).Result()
+	players, err := s.rdb.SMembers(rdbPkg.Ctx, "room:"+roomID).Result()
 	if err != nil {
 		return nil, fmt.Errorf("failed to get room members: %v", err)
 	}
-
 	opponentID := ""
 	for _, p := range players {
 		if p != playerID {
@@ -114,16 +132,16 @@ func (s *Service) PlaceShips(roomID, playerID string, ships []Ship) (*Board, err
 		}
 	}
 	if opponentID != "" {
-		opponentKey := fmt.Sprintf("room:%s:board:%s",roomID,opponentID)
-		exists, err := s.rdb.Exists(redisPkg.Ctx,opponentKey).Result()
-
+		opponentKey := fmt.Sprintf("room:%s:board:%s", roomID, opponentID)
+		exists, err := s.rdb.Exists(rdbPkg.Ctx, opponentKey).Result()
 		if err != nil {
 			return nil, fmt.Errorf("failed to check opponent board: %v", err)
 		}
 		if exists == 1 {
 			log.Printf("Both players in room %s have placed ships", roomID)
-			//TODO: Game can start (handle via WebSocket notification)
+			//[TODO] Game start notification handled by NotificationWorker
 		}
 	}
+
 	return board, nil
 }
