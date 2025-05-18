@@ -122,7 +122,7 @@ func (s *Service) PlaceShips(roomID, playerID string, ships []Ship) (*Board, err
 		}
 		if exists == 1 {
 			log.Printf("Both players in room %s have placed ships", roomID)
-			// Game can start (handled via WebSocket notification)
+			//TODO: Game can start (handle via WebSocket notification)
 		}
 	}
 	return board, nil
