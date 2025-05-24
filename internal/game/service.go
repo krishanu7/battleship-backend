@@ -4,7 +4,9 @@ import (
 	"encoding/json"
 	"fmt"
 	"log"
+	"math/rand"
 	"time"
+
 	rdbPkg "github.com/krishanu7/battleship-backend/pkg/redis"
 	"github.com/redis/go-redis/v9"
 )
@@ -19,7 +21,125 @@ func NewService(rdb *redis.Client) *Service {
 	}
 }
 
-// PlaceShips validates and stores a player's ship placements.
+// Initialize game state after both players placed ships
+func (s *Service) InitializeGame(roomId string) error {
+	players, err := s.rdb.SMembers(rdbPkg.Ctx, "room:"+roomId).Result()
+
+	if err != nil {
+		return fmt.Errorf("failed to retrive room members: %v", err)
+	}
+	if len(players) != 2 {
+		return fmt.Errorf("room %s has %d players, but expected 2", roomId, len(players))
+	}
+	// Randomly choose the first turn
+	source := rand.NewSource(time.Now().UnixNano())
+	rng := rand.New(source)
+	turn := players[rng.Intn(2)]
+
+	gameState := GameState{
+		RoomID:    roomId,
+		Turn:      turn,
+		StartedAt: time.Now().Unix(),
+	}
+	gameJSON, err := json.Marshal(gameState)
+
+	if err != nil {
+		return fmt.Errorf("failed to marshal game state: %v", err)
+	}
+	if err := s.rdb.Set(rdbPkg.Ctx, "room:"+roomId+":game", gameJSON, 24*time.Hour).Err(); err != nil {
+		return fmt.Errorf("failed to store game state: %v", err)
+	}
+	log.Printf("Initialized game for room %s with first turn: %s", roomId, turn)
+	return nil
+}
+
+// handles a player's attack and returns the result
+func (s *Service) ProcessAttack(roomID, playerID, coordinate string) (*Attack, string, error) {
+	// check if the room exists and have players
+	isMember, err := s.rdb.SIsMember(rdbPkg.Ctx, "room:"+roomID, playerID).Result()
+	if err != nil || !isMember {
+		return nil, "", fmt.Errorf("player %s not in room %s", playerID, roomID)
+	}
+	// check if valid coordinate
+	_, _, err = ParseCoordinate(coordinate)
+	if err != nil {
+		return nil, "", fmt.Errorf("Invalid coordinate: %v", err)
+	}
+	// Check if it's the player's turn
+	gameJSON, err := s.rdb.Get(rdbPkg.Ctx, "room:"+roomID+":game").Result()
+	if err != nil {
+		return nil, "", fmt.Errorf("failed to get game state: %v", err)
+	}
+	var gameState GameState
+	if err := json.Unmarshal([]byte(gameJSON), &gameState); err != nil {
+		return nil, "", fmt.Errorf("failed to unmarshal game state: %v", err)
+	}
+	if gameState.Turn != playerID {
+		return nil, "", fmt.Errorf("not your turn")
+	}
+
+	//Check if coordinate was already attacked
+	attackKey := fmt.Sprintf("room:%s:attacks:%s", roomID, playerID)
+	alreadyAttacked, err := s.rdb.SIsMember(rdbPkg.Ctx, attackKey, coordinate).Result()
+
+	if err != nil {
+		return nil, "", fmt.Errorf("failed to check attacks: %v", err)
+	}
+	if alreadyAttacked {
+		return nil, "", fmt.Errorf("coordinate %s already attacked", coordinate)
+	}
+	// Get opponent's player ID
+	players, err := s.rdb.SMembers(rdbPkg.Ctx, "room:"+roomID).Result()
+
+	var opponentID string
+	for _, p := range players {
+		if p != playerID {
+			opponentID = p
+			break
+		}
+	}
+	// Load opponet's board
+	boardKey := fmt.Sprintf("room:%s:board:%s", roomID, opponentID)
+	boardJSON, err := s.rdb.Get(rdbPkg.Ctx, boardKey).Result()
+	if err != nil {
+		return nil, "", fmt.Errorf("failed to get opponent board: %v", err)
+	}
+	var opponentBoard Board
+	if err := json.Unmarshal([]byte(boardJSON), &opponentBoard); err != nil {
+		return nil, "", fmt.Errorf("failed to unmarshal opponent board: %v", err)
+	}
+
+	// Check for hit or miss
+	result := "miss"
+	var nextTurn string
+	if _, exists := opponentBoard.Grid[coordinate]; exists {
+		result = "hit"
+		nextTurn = playerID // Keep turn on hit
+	} else {
+		nextTurn = opponentID // Switch turn on miss
+	}
+
+	// Record the attack
+	if err := s.rdb.SAdd(rdbPkg.Ctx, attackKey, coordinate).Err(); err != nil {
+		return nil, "", fmt.Errorf("failed to record attack: %v", err)
+	}
+
+	log.Printf("Player %s attacked %s in room %s: %s, next turn: %s", playerID, coordinate, roomID, result, nextTurn)
+
+	// Update turn
+	gameState.Turn = nextTurn
+	updatedGameJSON, err := json.Marshal(gameState)
+	if err != nil {
+		return nil, "", fmt.Errorf("failed to marshal updated game state: %v", err)
+	}
+	if err := s.rdb.Set(rdbPkg.Ctx, "room:"+roomID+":game", string(updatedGameJSON), 24*time.Hour).Err(); err != nil {
+		return nil, "", fmt.Errorf("failed to update game state: %v", err)
+	}
+
+	return &Attack{Coordinate: coordinate, Result: result}, nextTurn, nil
+}
+
+// validate and store a player's ship placements
 func (s *Service) PlaceShips(roomID, playerID string, ships []Ship) (*Board, error) {
 	// Verify player is in room
 	isMember, err := s.rdb.SIsMember(rdbPkg.Ctx, "room:"+roomID, playerID).Result()
