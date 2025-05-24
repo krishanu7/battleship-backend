@@ -8,9 +8,9 @@ import (
 	"github.com/gorilla/mux"
 	"github.com/krishanu7/battleship-backend/config"
 	"github.com/krishanu7/battleship-backend/internal/auth"
+	"github.com/krishanu7/battleship-backend/internal/game"
 	"github.com/krishanu7/battleship-backend/internal/match"
 	"github.com/krishanu7/battleship-backend/internal/ws"
-	"github.com/krishanu7/battleship-backend/internal/game"
 	"github.com/krishanu7/battleship-backend/pkg/redis"
 	wsPkg "github.com/krishanu7/battleship-backend/pkg/websocket"
 )
@@ -37,11 +37,11 @@ func main() {
 	matchChan := make(chan match.MatchResult)
 	matchHandler := match.NewHandler(matchService, matchChan)
 
-	gameService := game.NewService(rdb);
+	gameService := game.NewService(rdb)
 	gameHandler := game.NewHandler(gameService)
 
 	hub := wsPkg.NewHub()
-	wsHandler := ws.NewHandler(hub)
+	wsHandler := ws.NewHandler(hub, gameService)
 
 	generalHub := wsPkg.NewGeneralHub()
 	generalWsHandler := ws.NewGeneralHandler(generalHub)
@@ -52,7 +52,6 @@ func main() {
 	
 	// Route Handlers
 	r := mux.NewRouter()
-
 	r.HandleFunc("/api/v1/auth/register", authHandler.Register).Methods("POST")
 	r.HandleFunc("/api/v1/auth/login", authHandler.Login).Methods("POST")
 
