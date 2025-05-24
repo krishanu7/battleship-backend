@@ -47,7 +47,7 @@ func main() {
 	generalWsHandler := ws.NewGeneralHandler(generalHub)
 	
 	// Start notification worker
-	notificationWorker := ws.NewNotificationWorker(rdb, generalHub)
+	notificationWorker := ws.NewNotificationWorker(rdb, generalHub, gameService)
 	go notificationWorker.Run()
 	
 	// Route Handlers
