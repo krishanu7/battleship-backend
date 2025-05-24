@@ -17,17 +17,27 @@ const (
 
 type Ship struct {
 	Type        ShipType `json:"type"`
-	Size        int
-	Start       string   `json:"start"`
-	Orientation string   `json:"orientation"`
-	Cells       []string
+	Size        int      `json:"size"`
+	Start       string   `json:"start"`       // "A1"
+	Orientation string   `json:"orientation"` // "horizontal" or "vertical"
+	Cells       []string `json:"cells"`       // Computed occupied cells (["A1", "A2", ...])
+}
+type Board struct {
+	PlayerID string	`json:"playerId"`
+	RoomID   string	`json:"roomId"`
+	Ships    []Ship  `json:"ships"`
+	Grid     map[string]string `json:"grid"` // {"A1": "Carrier", "A2": "Carrier", ...}
 }
 
-type Board struct {
-	PlayerID string
-	RoomID   string
-	Ships    []Ship
-	Grid     map[string]string // {"A1": "Carrier", "A2": "Carrier", ...}
+type GameState struct {
+	RoomID string `json:"roomId"`
+	Turn string `json:"turn"` // curr playerId
+	StartedAt int64 `json:"startedAt"`
+}
+
+type Attack struct {
+	Coordinate string `json:"coordinate"` // A1, A3
+	Result string `json:"result"` // miss or hit
 }
 
 var ShipConfig = map[ShipType]int{
