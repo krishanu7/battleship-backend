@@ -1,19 +1,25 @@
 package ws
 
 import (
+	"encoding/json"
 	"log"
 	"net/http"
 
 	"github.com/gorilla/websocket"
+	"github.com/krishanu7/battleship-backend/internal/game"
 	wsPkg "github.com/krishanu7/battleship-backend/pkg/websocket"
 )
 
 type Handler struct {
-	Hub *wsPkg.Hub
+	Hub         *wsPkg.Hub
+	gameService *game.Service
 }
 
-func NewHandler(hub *wsPkg.Hub) *Handler {
-	return &Handler{Hub: hub}
+func NewHandler(hub *wsPkg.Hub, gameService *game.Service) *Handler {
+	return &Handler{
+		Hub:         hub,
+		gameService: gameService,
+	}
 }
 
 func (h *Handler) ServeWS(w http.ResponseWriter, r *http.Request) {
@@ -66,7 +72,62 @@ func (h *Handler) read(c *wsPkg.Client) {
 			log.Printf("Read error for client %s: %v", c.ID, err)
 			break
 		}
-		if c.Room != nil {
+		var message struct {
+			Type       string `json:"type"`
+			Coordinate string `json:"coordinate"`
+		}
+		if err := json.Unmarshal(msg, &message); err != nil {
+			log.Printf("Failed to unmarshal message from %s: %v", c.ID, err)
+			continue
+		}
+		if message.Type == "attack" && c.Room != nil {
+			attack, nextTurn, err := h.gameService.ProcessAttack(c.Room.ID, c.ID, message.Coordinate)
+			if err != nil {
+				errorMsg := struct {
+					Type    string `json:"type"`
+					Message string `json:"message"`
+				}{
+					Type:    "error",
+					Message: err.Error(),
+				}
+				errorBytes, _ := json.Marshal(errorMsg)
+				c.Send <- errorBytes
+				continue
+			}
+			// Broadcast attack result
+			resultMsg := struct {
+				Type       string `json:"type"`
+				Coordinate string `json:"coordinate"`
+				Result     string `json:"result"`
+				NextTurn   string `json:"nextTurn"`
+			}{
+				Type:       "attack_result",
+				Coordinate: attack.Coordinate,
+				Result:     attack.Result,
+				NextTurn:   nextTurn,
+			}
+			resultBytes, err := json.Marshal(resultMsg)
+
+			if err != nil {
+				log.Printf("Failed to marshal attack_result: %v", err)
+				continue
+			}
+			c.Room.Broadcast("", resultBytes)
+			// Notify next turn
+			turnMsg := struct {
+				Type     string `json:"type"`
+				PlayerID string `json:"playerId"`
+			}{
+				Type:     "turn",
+				PlayerID: nextTurn,
+			}
+			turnBytes, err := json.Marshal(turnMsg)
+			if err != nil {
+				log.Printf("Failed to marshal turn notification: %v", err)
+				continue
+			}
+			c.Room.Broadcast("", turnBytes)
+		} else if message.Type == "chat" {
 			c.Room.Broadcast(c.ID, msg)
 		}
 	}

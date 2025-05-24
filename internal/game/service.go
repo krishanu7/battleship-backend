@@ -63,7 +63,7 @@ func (s *Service) ProcessAttack(roomID, playerID, coordinate string) (*Attack, s
 	// check if valid coordinate
 	_, _, err = ParseCoordinate(coordinate)
 	if err != nil {
-		return nil, "", fmt.Errorf("Invalid coordinate: %v", err)
+		return nil, "", fmt.Errorf("invalid coordinate: %v", err)
 	}
 	// Check if it's the player's turn
 	gameJSON, err := s.rdb.Get(rdbPkg.Ctx, "room:"+roomID+":game").Result()
@@ -90,6 +90,9 @@ func (s *Service) ProcessAttack(roomID, playerID, coordinate string) (*Attack, s
 	}
 	// Get opponent's player ID
 	players, err := s.rdb.SMembers(rdbPkg.Ctx, "room:"+roomID).Result()
+	if err != nil {
+		return nil, "", fmt.Errorf("failed to get room members: %v", err)
+	}
 
 	var opponentID string
 	for _, p := range players {
