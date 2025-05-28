@@ -7,6 +7,7 @@ import (
 
 	"github.com/gorilla/websocket"
 	"github.com/krishanu7/battleship-backend/internal/game"
+	"github.com/krishanu7/battleship-backend/pkg/redis"
 	wsPkg "github.com/krishanu7/battleship-backend/pkg/websocket"
 )
 
@@ -48,7 +49,7 @@ func (h *Handler) ServeWS(w http.ResponseWriter, r *http.Request) {
 	client := &wsPkg.Client{
 		ID:   playerID,
 		Conn: conn,
-		Send: make(chan []byte, 10), // Add buffer
+		Send: make(chan []byte, 10),
 	}
 
 	room.AddClient(client)
@@ -72,63 +73,147 @@ func (h *Handler) read(c *wsPkg.Client) {
 			log.Printf("Read error for client %s: %v", c.ID, err)
 			break
 		}
+
 		var message struct {
 			Type       string `json:"type"`
 			Coordinate string `json:"coordinate"`
+			Message    string `json:"message"`
 		}
-		if err := json.Unmarshal(msg, &message); err != nil {
-			log.Printf("Failed to unmarshal message from %s: %v", c.ID, err)
-			continue
-		}
-		if message.Type == "attack" && c.Room != nil {
-			attack, nextTurn, err := h.gameService.ProcessAttack(c.Room.ID, c.ID, message.Coordinate)
-			if err != nil {
-				errorMsg := struct {
+		if err := json.Unmarshal(msg, &message); err == nil {
+			log.Printf("Received JSON message from %s: type=%s", c.ID, message.Type)
+			if message.Type == "attack" && c.Room != nil {
+				log.Printf("Processing attack from %s: %s", c.ID, message.Coordinate)
+				attack, sunkShips, gameOver, err := h.gameService.ProcessAttack(c.Room.ID, c.ID, message.Coordinate)
+				if err != nil {
+					log.Printf("Attack error for %s: %v", c.ID, err)
+					errorMsg := struct {
+						Type    string `json:"type"`
+						Message string `json:"message"`
+					}{
+						Type:    "error",
+						Message: err.Error(),
+					}
+					errorBytes, _ := json.Marshal(errorMsg)
+					c.Send <- errorBytes
+					continue
+				}
+				// Broadcast attack result
+				nextTurn := ""
+				if gameOver == nil {
+					nextTurn = h.getCurrentTurn(c.Room.ID)
+				}
+				resultMsg := struct {
+					Type       string `json:"type"`
+					Coordinate string `json:"coordinate"`
+					Result     string `json:"result"`
+					NextTurn   string `json:"nextTurn"`
+				}{
+					Type:       "attack_result",
+					Coordinate: attack.Coordinate,
+					Result:     attack.Result,
+					NextTurn:   nextTurn,
+				}
+				resultBytes, err := json.Marshal(resultMsg)
+				if err != nil {
+					log.Printf("Failed to marshal attack_result: %v", err)
+					continue
+				}
+				log.Printf("Broadcasting attack_result: %s", string(resultBytes))
+				c.Room.Broadcast("", resultBytes)
+
+				// Broadcast sunk ships
+				for _, ship := range sunkShips {
+					sunkMsg := struct {
+						Type     string `json:"type"`
+						Ship     string `json:"ship"`
+						PlayerID string `json:"playerId"`
+					}{
+						Type:     "ship_sunk",
+						Ship:     ship,
+						PlayerID: c.ID,
+					}
+					sunkBytes, err := json.Marshal(sunkMsg)
+					if err != nil {
+						log.Printf("Failed to marshal ship_sunk: %v", err)
+						continue
+					}
+					log.Printf("Broadcasting ship_sunk: %s", string(sunkBytes))
+					c.Room.Broadcast("", sunkBytes)
+				}
+
+				// Broadcast game over
+				if gameOver != nil {
+					gameOverMsg := struct {
+						Type   string `json:"type"`
+						Winner string `json:"winner"`
+						Loser  string `json:"loser"`
+					}{
+						Type:   "game_over",
+						Winner: gameOver.Winner,
+						Loser:  gameOver.Loser,
+					}
+					gameOverBytes, err := json.Marshal(gameOverMsg)
+					if err != nil {
+						log.Printf("Failed to marshal game_over: %v", err)
+						continue
+					}
+					log.Printf("Broadcasting game_over: %s", string(gameOverBytes))
+					c.Room.Broadcast("", gameOverBytes)
+				} else {
+					// Notify next turn
+					turnMsg := struct {
+						Type     string `json:"type"`
+						PlayerID string `json:"playerId"`
+					}{
+						Type:     "turn",
+						PlayerID: h.getCurrentTurn(c.Room.ID),
+					}
+					turnBytes, err := json.Marshal(turnMsg)
+					if err != nil {
+						log.Printf("Failed to marshal turn notification: %v", err)
+						continue
+					}
+					log.Printf("Broadcasting turn: %s", string(turnBytes))
+					c.Room.Broadcast("", turnBytes)
+				}
+			} else if message.Type == "chat" && c.Room != nil {
+				chatMsg := struct {
 					Type    string `json:"type"`
+					Sender  string `json:"sender"`
 					Message string `json:"message"`
 				}{
-					Type:    "error",
-					Message: err.Error(),
+					Type:    "chat",
+					Sender:  c.ID,
+					Message: message.Message,
 				}
-				errorBytes, _ := json.Marshal(errorMsg)
-				c.Send <- errorBytes
-				continue
+				chatBytes, err := json.Marshal(chatMsg)
+				if err != nil {
+					log.Printf("Failed to marshal chat message: %v", err)
+					continue
+				}
+				log.Printf("Broadcasting chat from %s: %s", c.ID, string(chatBytes))
+				c.Room.Broadcast(c.ID, chatBytes)
 			}
-			// Broadcast attack result
-			resultMsg := struct {
-				Type       string `json:"type"`
-				Coordinate string `json:"coordinate"`
-				Result     string `json:"result"`
-				NextTurn   string `json:"nextTurn"`
-			}{
-				Type:       "attack_result",
-				Coordinate: attack.Coordinate,
-				Result:     attack.Result,
-				NextTurn:   nextTurn,
+		} else {
+			log.Printf("Received plain text from %s: %s", c.ID, string(msg))
+			if c.Room != nil {
+				chatMsg := struct {
+					Type    string `json:"type"`
+					Sender  string `json:"sender"`
+					Message string `json:"message"`
+				}{
+					Type:    "chat",
+					Sender:  c.ID,
+					Message: string(msg),
+				}
+				chatBytes, err := json.Marshal(chatMsg)
+				if err != nil {
+					log.Printf("Failed to marshal plain text chat message: %v", err)
+					continue
+				}
+				log.Printf("Broadcasting plain text chat from %s: %s", c.ID, string(chatBytes))
+				c.Room.Broadcast(c.ID, chatBytes)
 			}
-			resultBytes, err := json.Marshal(resultMsg)
-
-			if err != nil {
-				log.Printf("Failed to marshal attack_result: %v", err)
-				continue
-			}
-			c.Room.Broadcast("", resultBytes)
-			// Notify next turn
-			turnMsg := struct {
-				Type     string `json:"type"`
-				PlayerID string `json:"playerId"`
-			}{
-				Type:     "turn",
-				PlayerID: nextTurn,
-			}
-			turnBytes, err := json.Marshal(turnMsg)
-			if err != nil {
-				log.Printf("Failed to marshal turn notification: %v", err)
-				continue
-			}
-			c.Room.Broadcast("", turnBytes)
-		} else if message.Type == "chat" {
-			c.Room.Broadcast(c.ID, msg)
 		}
 	}
 }
@@ -144,4 +229,19 @@ func (h *Handler) write(c *wsPkg.Client) {
 		}
 		log.Printf("Sent message to client %s: %s", c.ID, string(msg))
 	}
+}
+
+// getCurrentTurn retrieves the current turn from game state.
+func (h *Handler) getCurrentTurn(roomID string) string {
+	gameJSON, err := h.gameService.Rdb.Get(redis.Ctx, "room:"+roomID+":game").Result()
+	if err != nil {
+		log.Printf("Failed to get game state for turn: %v", err)
+		return ""
+	}
+	var gameState game.GameState
+	if err := json.Unmarshal([]byte(gameJSON), &gameState); err != nil {
+		log.Printf("Failed to unmarshal game state for turn: %v", err)
+		return ""
+	}
+	return gameState.Turn
 }
