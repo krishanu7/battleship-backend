@@ -40,6 +40,13 @@ type Attack struct {
 	Result string `json:"result"` // miss or hit
 }
 
+type PlayerStats struct {
+	PlayerID string `json:"playerId"`
+	Wins int `json:"wins"`
+	Losses int `json:"losses"`
+	Elo int `json:"elo"`
+}
+
 var ShipConfig = map[ShipType]int{
 	Carrier:    5,
 	Battleship: 4,

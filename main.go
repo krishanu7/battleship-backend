@@ -37,7 +37,7 @@ func main() {
 	matchChan := make(chan match.MatchResult)
 	matchHandler := match.NewHandler(matchService, matchChan)
 
-	gameService := game.NewService(rdb)
+	gameService := game.NewService(rdb,db)
 	gameHandler := game.NewHandler(gameService)
 
 	hub := wsPkg.NewHub()
