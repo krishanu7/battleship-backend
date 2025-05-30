@@ -9,6 +9,7 @@ import (
 	"github.com/krishanu7/battleship-backend/config"
 	"github.com/krishanu7/battleship-backend/internal/auth"
 	"github.com/krishanu7/battleship-backend/internal/game"
+	"github.com/krishanu7/battleship-backend/internal/leaderboard"
 	"github.com/krishanu7/battleship-backend/internal/match"
 	"github.com/krishanu7/battleship-backend/internal/ws"
 	"github.com/krishanu7/battleship-backend/pkg/redis"
@@ -40,6 +41,9 @@ func main() {
 	gameService := game.NewService(rdb,db)
 	gameHandler := game.NewHandler(gameService)
 
+	leaderboardService := leaderboard.NewService(db)
+	leaderboardHandler := leaderboard.NewHandler(leaderboardService)
+
 	hub := wsPkg.NewHub()
 	wsHandler := ws.NewHandler(hub, gameService)
 
@@ -62,7 +66,8 @@ func main() {
 	r.HandleFunc("/api/v1/match/status", matchHandler.GetMatchStatus).Methods("GET")
 
 	r.HandleFunc("/api/v1/game/place-ships", gameHandler.PlaceShips).Methods("POST")
-
+	r.HandleFunc("/api/v1/leaderboard", leaderboardHandler.GetLeaderboard).Methods("GET")
+	
 	r.HandleFunc("/ws", wsHandler.ServeWS).Methods("GET")
 	r.HandleFunc("/ws/general", generalWsHandler.ServeGeneralWS).Methods("GET")
 

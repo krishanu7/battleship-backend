@@ -15,7 +15,7 @@ import (
 
 type Service struct {
 	Rdb *redis.Client
-	db *sql.DB
+	db  *sql.DB
 }
 
 type GameOver struct {
@@ -26,7 +26,7 @@ type GameOver struct {
 func NewService(rdb *redis.Client, db *sql.DB) *Service {
 	return &Service{
 		Rdb: rdb,
-		db: db,
+		db:  db,
 	}
 }
 
@@ -185,7 +185,7 @@ func (s *Service) ProcessAttack(roomID, playerID, coordinate string) (*Attack, [
 				Loser:  opponentID,
 			}
 			// Update stats
-			if err := s.updatePlayerStats(playerID, opponentID); err != nil {
+			if err := s.updatePlayerStats(playerID, opponentID, gameState); err != nil {
 				log.Printf("Failed to update player stats: %v", err)
 			}
 			// Clean up Redis
@@ -343,7 +343,7 @@ func (s *Service) PlaceShips(roomID, playerID string, ships []Ship) (*Board, err
 	return board, nil
 }
 
-func (s *Service) updatePlayerStats(winnerID, loserID string) error {
+func (s *Service) updatePlayerStats(winnerID, loserID string, gameState GameState) error {
 	var winnerStats, loserStats PlayerStats
 	err := s.db.QueryRow("SELECT player_id, wins, losses, elo FROM stats WHERE player_id = $1", winnerID).
 		Scan(&winnerStats.PlayerID, &winnerStats.Wins, &winnerStats.Losses, &winnerStats.Elo)
@@ -381,6 +381,10 @@ func (s *Service) updatePlayerStats(winnerID, loserID string) error {
 	)
 	if err != nil {
 		return fmt.Errorf("failed to update loser stats: %v", err)
+	}
+	_, err = s.db.Exec("INSERT INTO games (room_id, winner_id, loser_id, started_at, ended_at) VALUES ($1, $2, $3, $4, $5)", gameState.RoomID, winnerID, loserID, time.Unix(gameState.StartedAt, 0), time.Now())
+	if err != nil {
+		log.Printf("Failed to log game: %v", err)
 	}
 	log.Printf("Updated stats: %s (wins=%d, elo=%d), %s (losses=%d, elo=%d)",
 		winnerID, winnerStats.Wins+1, newWinnerElo, loserID, loserStats.Losses+1, newLoserElo)
