@@ -3,6 +3,8 @@ package auth
 import (
 	"encoding/json"
 	"net/http"
+
+	"github.com/krishanu7/battleship-backend/db"
 )
 
 type AuthHandler struct {
@@ -18,6 +20,7 @@ func NewAuthHandler(service *Service) *AuthHandler {
 func (h *AuthHandler) Register(w http.ResponseWriter, r *http.Request) {
 	var req struct {
 		Username string `json:"username"`
+		Email    string `json:"email"`
 		Password string `json:"password"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
@@ -25,26 +28,30 @@ func (h *AuthHandler) Register(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if err := h.service.Register(req.Username, req.Password); err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
+	user, err := h.service.Register(req.Username, req.Email, req.Password)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	}
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusCreated)
 
 	resp := struct {
-		Message string `json:"message"`
+		Message string   `json:"message"`
+		User    db.User  `json:"user"`
 	}{
-		Message: "User registered successfully !",
+		Message: "User registered successfully!",
+		User:    user,
 	}
+	resp.User.Password = ""
 	json.NewEncoder(w).Encode(resp)
 }
-
 func (h *AuthHandler) Login(w http.ResponseWriter, r *http.Request) {
 	var req struct {
 		Username string `json:"username"`
 		Password string `json:"password"`
 	}
+
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusBadRequest)

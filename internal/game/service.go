@@ -9,13 +9,14 @@ import (
 	"math/rand"
 	"time"
 
+	"github.com/google/uuid"
 	rdbPkg "github.com/krishanu7/battleship-backend/pkg/redis"
 	"github.com/redis/go-redis/v9"
 )
 
 type Service struct {
 	Rdb *redis.Client
-	db *sql.DB
+	db  *sql.DB
 }
 
 type GameOver struct {
@@ -26,7 +27,7 @@ type GameOver struct {
 func NewService(rdb *redis.Client, db *sql.DB) *Service {
 	return &Service{
 		Rdb: rdb,
-		db: db,
+		db:  db,
 	}
 }
 
@@ -185,7 +186,7 @@ func (s *Service) ProcessAttack(roomID, playerID, coordinate string) (*Attack, [
 				Loser:  opponentID,
 			}
 			// Update stats
-			if err := s.updatePlayerStats(playerID, opponentID); err != nil {
+			if err := s.updatePlayerStats(playerID, opponentID, gameState); err != nil {
 				log.Printf("Failed to update player stats: %v", err)
 			}
 			// Clean up Redis
@@ -343,7 +344,7 @@ func (s *Service) PlaceShips(roomID, playerID string, ships []Ship) (*Board, err
 	return board, nil
 }
 
-func (s *Service) updatePlayerStats(winnerID, loserID string) error {
+func (s *Service) updatePlayerStats(winnerID, loserID string, gameState GameState) error {
 	var winnerStats, loserStats PlayerStats
 	err := s.db.QueryRow("SELECT player_id, wins, losses, elo FROM stats WHERE player_id = $1", winnerID).
 		Scan(&winnerStats.PlayerID, &winnerStats.Wins, &winnerStats.Losses, &winnerStats.Elo)
@@ -382,7 +383,172 @@ func (s *Service) updatePlayerStats(winnerID, loserID string) error {
 	if err != nil {
 		return fmt.Errorf("failed to update loser stats: %v", err)
 	}
+	_, err = s.db.Exec("INSERT INTO games (room_id, winner_id, loser_id, started_at, ended_at) VALUES ($1, $2, $3, $4, $5)", gameState.RoomID, winnerID, loserID, time.Unix(gameState.StartedAt, 0), time.Now())
+	if err != nil {
+		log.Printf("Failed to log game: %v", err)
+	}
 	log.Printf("Updated stats: %s (wins=%d, elo=%d), %s (losses=%d, elo=%d)",
 		winnerID, winnerStats.Wins+1, newWinnerElo, loserID, loserStats.Losses+1, newLoserElo)
 	return nil
+}
+
+
+func (s* Service) RequestRematch(gameID, playerID string) error {
+	// Validate UUIDs
+	if _, err := uuid.Parse(playerID); err != nil {
+		return fmt.Errorf("invalid player UUID: %w", err)
+	}
+	if _, err := uuid.Parse(gameID); err != nil {
+		return fmt.Errorf("invalid game UUID: %w",err)
+	}
+	var roomID string
+	var winnerID, loserID sql.NullString
+	err := s.db.QueryRow(`SELECT room_id, winner_id, loser_id FROM games WHERE id = $1`, gameID).Scan(&roomID, &winnerID, &loserID)
+	
+	if err == sql.ErrNoRows {
+		return fmt.Errorf("game %s not found", gameID)
+	}
+	if err != nil {
+		log.Printf("Failed to query game %s: %v", gameID, err)
+		return err
+	}
+	// Verify players in the game
+	playerInGame := false
+	var opponentID string
+	if winnerID.Valid && winnerID.String == playerID {
+		playerInGame = true
+		if loserID.Valid {
+			opponentID = loserID.String
+		}
+	} else if loserID.Valid && loserID.String == playerID {
+		playerInGame = true
+		if winnerID.Valid {
+			opponentID = winnerID.String
+		}
+	}
+	if !playerInGame {
+		return fmt.Errorf("player %s not part of game %s", playerID, gameID)
+	}
+	if opponentID == "" {
+		return fmt.Errorf("opponent not found for game %s", gameID)
+	}
+	
+	rematchKey := fmt.Sprintf("rematch:%s",gameID)
+	exists, err := s.Rdb.SIsMember(rdbPkg.Ctx, rematchKey, playerID).Result()
+
+	if err != nil {
+		log.Printf("Failed to check rematch status for %s: %v", playerID, err)
+		return err
+	}
+	if exists {
+		return fmt.Errorf("player %s already requested rematch", playerID)
+	}
+	if err := s.Rdb.SAdd(rdbPkg.Ctx, rematchKey, playerID).Err(); err != nil {
+		log.Printf("Failed to add %s to rematch set: %v", playerID, err)
+	}
+	s.Rdb.Expire(rdbPkg.Ctx, rematchKey, 3*time.Minute)
+	// Publish rematch req notification
+	notification := map[string]interface{}{
+		"type": "rematch_request",
+		"gameId": gameID,
+		"roomId": roomID,
+		"player": playerID,
+		"opponent": opponentID,
+	}
+	msg, err := json.Marshal(notification)
+
+	if err != nil {
+		log.Printf("failed to marshal rematch notification: %v", err)
+		return err
+	}
+	if err := s.Rdb.Publish(rdbPkg.Ctx, "notification", msg).Err(); err != nil {
+		log.Printf("Failed to publish rematch notification: %v", err)
+		s.Rdb.SRem(rdbPkg.Ctx, rematchKey, playerID)
+		return err
+	}
+	log.Printf("Published rematch_request for player %s in game %s", playerID, gameID)
+
+	// check both players requested for rematch
+	rematchCount, err := s.Rdb.SCard(rdbPkg.Ctx, rematchKey).Result()
+	if err != nil {
+		log.Printf("Failed to count rematch requests: %v", err)
+		return err
+	}
+	if rematchCount == 2{
+		if err := s.ResetGameState(roomID, playerID, opponentID); err != nil {
+			log.Printf("Failed to reset game state for room %s: %v", roomID, err)
+			return err
+		}
+		// Create new Game
+		newGameID := uuid.New().String()
+
+		_, err = s.db.Exec(`INSERT INTO games (id, room_id, started_at) VALUES ($1, $2, $3)`, newGameID, roomID, time.Now())
+		if err != nil {
+			log.Printf("Failed to create new game: %v", err)
+			return err
+		}
+		// Increment rematch history
+		rematchHistoryKey := fmt.Sprintf("rematch_history:%s", roomID);
+
+		if err := s.Rdb.Incr(rdbPkg.Ctx, rematchHistoryKey).Err(); err != nil {
+			log.Printf("Failed to increment rematch history: %v", err)
+		}
+		s.Rdb.Expire(rdbPkg.Ctx, rematchHistoryKey, 24*time.Hour)
+
+		// publish rematch confirmed notification
+		confirmedNotification := map[string]interface{} {
+			"type" : "rematch_confirmed",
+			"gameId": newGameID,
+			"roomId": roomID,
+			"players": []string{playerID, opponentID},
+		}
+		confirmedMsg, err := json.Marshal(confirmedNotification)
+		if err != nil {
+			log.Printf("Failed to marshal rematch_confirmed: %v", err)
+			return err
+		}
+		if err := s.Rdb.Publish(rdbPkg.Ctx, "notification", confirmedMsg).Err(); err != nil {
+			log.Printf("Failed to publish rematch_confirmed: %v", err)
+			return err
+		}
+		log.Printf("Rematch confirmed for game %s in room %s", newGameID, roomID)
+	}
+	return nil
+}
+
+func (s* Service) ResetGameState(roomID, player1ID, player2ID string) error {
+	for _, playerID := range []string{player1ID,player2ID} {
+		key := fmt.Sprintf("room:%s:board:%s", roomID, playerID)
+		if err := s.Rdb.Del(rdbPkg.Ctx, key).Err(); err != nil {
+			log.Printf("Failed to delete board for %s: %v", playerID, err)
+			return err
+		}
+		attack_key := fmt.Sprintf("room:%s:attacks:%s", roomID, playerID);
+		if err := s.Rdb.Del(rdbPkg.Ctx, attack_key).Err(); err != nil {
+			log.Printf("Failed to delete attack moves for %s: %v", playerID, err)
+			return err
+		}
+	}
+	// Clear game state
+	stateKey := fmt.Sprintf("room:%s:game", roomID);
+	if err := s.Rdb.Del(rdbPkg.Ctx, stateKey).Err(); err != nil {
+		log.Printf("Failed to delete game state for %s: %v", roomID, err)
+		return err
+	}
+	log.Printf("Reset game state for room %s", roomID)
+	return nil
+}
+
+func (s *Service) GetRematchHistory (roomID string) (int64, error) {
+	key := fmt.Sprintf("rematch_history:%s", roomID);
+
+	count, err := s.Rdb.Get(rdbPkg.Ctx, key).Int64();
+	if err == redis.Nil {
+		return 0, nil
+	}
+	if err != nil {
+		log.Printf("Failed to get rematch history for %s: %v", roomID, err)
+		return 0, err
+	}
+	return count, nil
 }
